@@ -20,20 +20,6 @@ def get_conn():
 def init_db():
     with get_conn() as conn:
         conn.executescript("""
-            PRAGMA journal_mode=WAL;
-        """)
-        # Add reminder columns if they don't exist yet
-        existing = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
-        for col, default in [
-            ("reminder_morning", "10:50"),
-            ("reminder_lunch",   "14:00"),
-            ("reminder_evening", "20:00"),
-        ]:
-            if col not in existing:
-                conn.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT DEFAULT '{default}'")
-
-    with get_conn() as conn:
-        conn.executescript("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id     INTEGER PRIMARY KEY,
                 name        TEXT,
@@ -77,6 +63,15 @@ def init_db():
                 content TEXT
             );
         """)
+        # Add reminder columns if they don't exist yet (migration)
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        for col, default in [
+            ("reminder_morning", "10:50"),
+            ("reminder_lunch",   "14:00"),
+            ("reminder_evening", "20:00"),
+        ]:
+            if col not in existing:
+                conn.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT DEFAULT '{default}'")
 
 
 # ── Users ──────────────────────────────────────────────────────────────────

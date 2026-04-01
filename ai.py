@@ -191,7 +191,7 @@ async def chat(user_id: int, user_text: str) -> str:
     messages = [{"role": "system", "content": system_prompt}] + history
 
     response = await client.chat.completions.create(
-        model="gpt-4o",
+        model="gpt-4o-mini",
         messages=messages,
         tools=TOOLS,
         tool_choice="auto",
@@ -219,7 +219,7 @@ async def chat(user_id: int, user_text: str) -> str:
         messages[0] = {"role": "system", "content": _build_system_prompt(user_id)}
 
         response = await client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",
             messages=messages,
             tools=TOOLS,
             tool_choice="auto",

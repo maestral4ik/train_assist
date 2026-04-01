@@ -215,14 +215,9 @@ async def chat(user_id: int, user_text: str) -> str:
         messages.append(msg)
         messages.extend(tool_results)
 
-        # Rebuild system prompt with updated stats
-        messages[0] = {"role": "system", "content": _build_system_prompt(user_id)}
-
         response = await client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
-            tools=TOOLS,
-            tool_choice="auto",
         )
         msg = response.choices[0].message
 

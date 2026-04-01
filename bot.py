@@ -216,19 +216,35 @@ async def cmd_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     parse_mode="Markdown")
 
 
+async def cmd_undo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user = db.get_user(user_id)
+    if not user or user["onboarding_step"] != "done":
+        await update.message.reply_text("Сначала пройди регистрацию — напиши /start")
+        return
+
+    row = db.delete_last_food_log(user_id)
+    if row:
+        await update.message.reply_text(f"✅ Удалено: {row['description']} ({row['calories']} ккал)")
+    else:
+        await update.message.reply_text("Нет записей еды для отмены.")
+
+
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "🤖 *Бот-ассистент по похудению*\n\n"
         "Просто пиши мне в свободной форме:\n"
         "• «Съел кашу с молоком» → запишу еду\n"
         "• «Бегал 30 минут» → запишу активность\n"
-        "• «Вешу 74.5» → запишу вес\n\n"
+        "• «Вешу 74.5» → запишу вес\n"
+        "• Отправь фото еды 📸 → распознаю и запишу\n\n"
         "Поддерживаются голосовые сообщения 🎤\n\n"
         "*Команды:*\n"
         "/start — начать / перепройти регистрацию\n"
         "/stats — статистика за сегодня\n"
         "/history — что ел сегодня\n"
         "/progress — история веса\n"
+        "/undo — отменить последнюю запись еды\n"
         "/reminders — настроить время напоминаний\n"
         "/help — эта справка"
     )
@@ -252,6 +268,25 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log.exception("Error in handle_text")
         await update.message.reply_text("Произошла ошибка. Попробуй ещё раз.")
+
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    if not db.get_user(user_id):
+        db.upsert_user(user_id)
+
+    await update.message.chat.send_action("typing")
+    try:
+        photo = update.message.photo[-1]
+        tg_file = await context.bot.get_file(photo.file_id)
+        file_bytes = await tg_file.download_as_bytearray()
+
+        reply = await ai.analyze_food_photo(user_id, bytes(file_bytes))
+        await update.message.reply_text(reply)
+    except Exception:
+        log.exception("Error in handle_photo")
+        await update.message.reply_text("Не удалось распознать фото. Попробуй ещё раз.")
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -292,10 +327,12 @@ def main():
     app.add_handler(CommandHandler("stats",     cmd_stats))
     app.add_handler(CommandHandler("history",   cmd_history))
     app.add_handler(CommandHandler("progress",  cmd_progress))
+    app.add_handler(CommandHandler("undo",      cmd_undo))
     app.add_handler(CommandHandler("reminders", cmd_reminders))
     app.add_handler(CommandHandler("help",      cmd_help))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
     from telegram import BotCommand
     tz = ZoneInfo(os.getenv("TIMEZONE", "Europe/Moscow"))
@@ -307,6 +344,7 @@ def main():
             BotCommand("stats",       "Статистика за сегодня"),
             BotCommand("history",     "Что ел сегодня"),
             BotCommand("progress",    "История веса"),
+            BotCommand("undo",        "Отменить последнюю запись еды"),
             BotCommand("reminders",   "Настроить время напоминаний"),
             BotCommand("help",        "Справка"),
         ])

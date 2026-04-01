@@ -191,32 +191,36 @@ def get_today_summary(user_id: int) -> dict:
     today = date.today()
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute(
-            "SELECT COALESCE(SUM(calories),0) FROM food_logs WHERE user_id=%s AND date=%s",
-            (user_id, today),
-        )
-        eaten = cur.fetchone()[0]
+        cur.execute("""
+            SELECT
+                COALESCE((SELECT SUM(calories) FROM food_logs WHERE user_id=%s AND date=%s), 0),
+                COALESCE((SELECT SUM(calories_burned) FROM activity_logs WHERE user_id=%s AND date=%s), 0),
+                COALESCE((SELECT daily_calories_limit FROM users WHERE user_id=%s), 0)
+        """, (user_id, today, user_id, today, user_id))
+        eaten, burned, limit = cur.fetchone()
 
-        cur.execute(
-            "SELECT COALESCE(SUM(calories_burned),0) FROM activity_logs WHERE user_id=%s AND date=%s",
-            (user_id, today),
-        )
-        burned = cur.fetchone()[0]
-
-        cur.execute("SELECT daily_calories_limit FROM users WHERE user_id=%s", (user_id,))
-        row = cur.fetchone()
-
-    limit = row[0] if row and row[0] else 0
     net = eaten - burned
     balance = net - limit
+    return {"eaten": eaten, "burned": burned, "limit": limit, "net": net, "balance": balance}
 
-    return {
-        "eaten": eaten,
-        "burned": burned,
-        "limit": limit,
-        "net": net,
-        "balance": balance,
-    }
+
+def get_user_and_today(user_id: int):
+    today = date.today()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM users WHERE user_id=%s", (user_id,))
+        user = _fetchone(cur)
+        cur.execute("""
+            SELECT
+                COALESCE((SELECT SUM(calories) FROM food_logs WHERE user_id=%s AND date=%s), 0),
+                COALESCE((SELECT SUM(calories_burned) FROM activity_logs WHERE user_id=%s AND date=%s), 0)
+        """, (user_id, today, user_id, today))
+        eaten, burned = cur.fetchone()
+
+    limit = user["daily_calories_limit"] if user and user["daily_calories_limit"] else 0
+    net = eaten - burned
+    summary = {"eaten": eaten, "burned": burned, "limit": limit, "net": net, "balance": net - limit}
+    return user, summary
 
 
 def get_today_logs(user_id: int) -> dict:
@@ -245,6 +249,34 @@ def get_weight_history(user_id: int, limit: int = 10) -> list:
         )
         rows = _fetchall(cur)
     return list(reversed(rows))
+
+
+# ── Undo ───────────────────────────────────────────────────────────────────
+
+def delete_last_food_log(user_id: int) -> dict | None:
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, description, calories FROM food_logs WHERE user_id=%s ORDER BY id DESC LIMIT 1",
+            (user_id,),
+        )
+        row = _fetchone(cur)
+        if row:
+            cur.execute("DELETE FROM food_logs WHERE id=%s", (row["id"],))
+        return row
+
+
+def delete_last_activity_log(user_id: int) -> dict | None:
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, description, calories_burned FROM activity_logs WHERE user_id=%s ORDER BY id DESC LIMIT 1",
+            (user_id,),
+        )
+        row = _fetchone(cur)
+        if row:
+            cur.execute("DELETE FROM activity_logs WHERE id=%s", (row["id"],))
+        return row
 
 
 # ── Chat history ───────────────────────────────────────────────────────────

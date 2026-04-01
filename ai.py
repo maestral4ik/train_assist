@@ -64,6 +64,24 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "delete_last_entry",
+            "description": "Удалить последнюю запись еды или активности (если пользователь хочет отменить/исправить)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entry_type": {
+                        "type": "string",
+                        "enum": ["food", "activity"],
+                        "description": "Тип записи для удаления",
+                    },
+                },
+                "required": ["entry_type"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "finish_onboarding",
             "description": "Завершить онбординг, сохранить профиль пользователя и рассчитать дневной лимит калорий",
             "parameters": {
@@ -83,10 +101,7 @@ TOOLS = [
 ]
 
 
-def _build_system_prompt(user_id: int) -> str:
-    user = db.get_user(user_id)
-    summary = db.get_today_summary(user_id)
-
+def _build_system_prompt(user, summary) -> str:
     profile_block = ""
     stats_block = ""
 
@@ -163,6 +178,18 @@ async def _execute_tool(user_id: int, name: str, args: dict) -> str:
             f"Лимит: {s['limit']} ккал | Баланс: {balance_sign}{s['balance']} ккал"
         )
 
+    elif name == "delete_last_entry":
+        if args["entry_type"] == "food":
+            row = db.delete_last_food_log(user_id)
+            if row:
+                return f"Удалено: {row['description']} ({row['calories']} ккал)"
+            return "Нечего удалять"
+        else:
+            row = db.delete_last_activity_log(user_id)
+            if row:
+                return f"Удалено: {row['description']} (-{row['calories_burned']} ккал)"
+            return "Нечего удалять"
+
     elif name == "finish_onboarding":
         limit = db.calculate_calories_limit(
             args["gender"], args["age"], args["height_cm"], args["current_weight"]
@@ -185,8 +212,8 @@ async def _execute_tool(user_id: int, name: str, args: dict) -> str:
 
 async def chat(user_id: int, user_text: str) -> str:
     db.add_message(user_id, "user", user_text)
-    history = db.get_messages(user_id)
-    system_prompt = _build_system_prompt(user_id)
+    history, (user, summary) = db.get_messages(user_id), db.get_user_and_today(user_id)
+    system_prompt = _build_system_prompt(user, summary)
 
     messages = [{"role": "system", "content": system_prompt}] + history
 
@@ -212,6 +239,53 @@ async def chat(user_id: int, user_text: str) -> str:
             })
 
         # Add assistant message with tool calls
+        messages.append(msg)
+        messages.extend(tool_results)
+
+        response = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+        )
+        msg = response.choices[0].message
+
+    reply = msg.content or ""
+    db.add_message(user_id, "assistant", reply)
+    return reply
+
+
+async def analyze_food_photo(user_id: int, file_bytes: bytes) -> str:
+    import base64
+    image_data = base64.b64encode(file_bytes).decode()
+
+    user, summary = db.get_user_and_today(user_id)
+    system_prompt = _build_system_prompt(user, summary)
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}},
+                {"type": "text", "text": "Что это за еда на фото? Определи и запиши калории."},
+            ],
+        },
+    ]
+
+    response = await client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=messages,
+        tools=TOOLS,
+        tool_choice="auto",
+    )
+    msg = response.choices[0].message
+
+    if msg.tool_calls:
+        tool_results = []
+        for tc in msg.tool_calls:
+            args = json.loads(tc.function.arguments)
+            result = await _execute_tool(user_id, tc.function.name, args)
+            tool_results.append({"tool_call_id": tc.id, "role": "tool", "content": result})
+
         messages.append(msg)
         messages.extend(tool_results)
 

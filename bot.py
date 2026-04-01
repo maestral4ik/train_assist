@@ -61,6 +61,32 @@ def _ascii_weight_chart(history: list) -> str:
 
 # ── Command handlers ────────────────────────────────────────────────────────
 
+async def weekly_report(context: ContextTypes.DEFAULT_TYPE):
+    users = db.get_active_users()
+    for uid in users:
+        try:
+            w = db.get_week_summary(uid)
+            streak = db.get_streak(uid)
+            delta_text = ""
+            if w["weight_delta"] is not None:
+                sign = "+" if w["weight_delta"] > 0 else ""
+                delta_text = f"⚖️ Изменение веса: {sign}{w['weight_delta']} кг\n"
+            streak_text = f"🔥 Стрик: {streak} дн. подряд\n" if streak > 0 else ""
+            text = (
+                f"📅 *Итоги недели*\n\n"
+                f"🍽 Съедено за неделю: {w['total_eaten']} ккал\n"
+                f"📊 Среднее в день: {w['avg_eaten']} ккал\n"
+                f"🏃 Сожжено активностью: {w['total_burned']} ккал\n"
+                f"📆 Дней с записями: {w['days_logged']} из 7\n"
+                f"{delta_text}"
+                f"{streak_text}\n"
+                f"Отличная работа, продолжай в том же духе! 💪"
+            )
+            await context.bot.send_message(uid, text, parse_mode="Markdown")
+        except Exception:
+            pass
+
+
 async def reminder_tick(context: ContextTypes.DEFAULT_TYPE):
     tz = context.bot_data["tz"]
     hhmm = datetime.now(tz).strftime("%H:%M")
@@ -81,6 +107,8 @@ async def reminder_tick(context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(uid, text)
             if u["reminder_evening"] == hhmm:
                 s = db.get_today_summary(uid)
+                streak = db.get_streak(uid)
+                streak_text = f"\n🔥 Стрик: {streak} дн. подряд!" if streak > 1 else ""
                 balance_sign = "+" if s["balance"] > 0 else ""
                 if s["eaten"] == 0:
                     text = "🌙 Привет! Кажется, ты сегодня ничего не записал. Расскажи, что ел?"
@@ -88,12 +116,12 @@ async def reminder_tick(context: ContextTypes.DEFAULT_TYPE):
                     text = (
                         f"🌙 Итоги дня: съедено {s['eaten']} ккал, лимит {s['limit']} ккал.\n"
                         f"Баланс: {balance_sign}{s['balance']} ккал — лимит превышен. "
-                        f"Может, сделаешь небольшую прогулку? 🚶"
+                        f"Может, сделаешь небольшую прогулку? 🚶{streak_text}"
                     )
                 else:
                     text = (
                         f"🌙 Итоги дня: съедено {s['eaten']} ккал из {s['limit']} ккал. "
-                        f"Отличная работа! 💪"
+                        f"Отличная работа! 💪{streak_text}"
                     )
                 await context.bot.send_message(uid, text)
         except Exception:
@@ -166,15 +194,18 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     s = db.get_today_summary(user_id)
+    streak = db.get_streak(user_id)
     balance_sign = "+" if s["balance"] > 0 else ""
     status = "⚠️ Лимит превышен!" if s["balance"] > 0 else "✅ В пределах нормы"
+    streak_text = f"🔥 Стрик: {streak} дн. подряд\n" if streak > 0 else ""
     text = (
         f"📊 *Статистика за сегодня*\n\n"
         f"🍽 Съедено: {s['eaten']} ккал\n"
         f"🏃 Сожжено: {s['burned']} ккал\n"
         f"📉 Чистое: {s['net']} ккал\n"
         f"🎯 Лимит: {s['limit']} ккал\n"
-        f"⚡ Баланс: {balance_sign}{s['balance']} ккал\n\n"
+        f"⚡ Баланс: {balance_sign}{s['balance']} ккал\n"
+        f"{streak_text}\n"
         f"{status}"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -349,6 +380,8 @@ def main():
             BotCommand("help",        "Справка"),
         ])
         app.job_queue.run_repeating(reminder_tick, interval=60, first=1, name="reminders")
+        tz = context.bot_data["tz"]
+        app.job_queue.run_daily(weekly_report, time=time(20, 0, tzinfo=tz), days=(6,), name="weekly_report")
 
     app.post_init = set_commands
     log.info("Bot started")

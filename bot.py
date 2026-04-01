@@ -380,8 +380,7 @@ def main():
             BotCommand("help",        "Справка"),
         ])
         app.job_queue.run_repeating(reminder_tick, interval=60, first=1, name="reminders")
-        tz = context.bot_data["tz"]
-        app.job_queue.run_daily(weekly_report, time=time(20, 0, tzinfo=tz), days=(6,), name="weekly_report")
+        app.job_queue.run_daily(weekly_report, time=time(20, 0, tzinfo=app.bot_data["tz"]), days=(6,), name="weekly_report")
 
     app.post_init = set_commands
     log.info("Bot started")

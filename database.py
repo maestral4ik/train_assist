@@ -1,5 +1,5 @@
 import os
-from datetime import date
+from datetime import date, timedelta
 from contextlib import contextmanager
 import psycopg2
 import psycopg2.extras
@@ -249,6 +249,74 @@ def get_weight_history(user_id: int, limit: int = 10) -> list:
         )
         rows = _fetchall(cur)
     return list(reversed(rows))
+
+
+# ── Streak & weekly ────────────────────────────────────────────────────────
+
+def get_streak(user_id: int) -> int:
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT DISTINCT date FROM food_logs WHERE user_id=%s ORDER BY date DESC",
+            (user_id,),
+        )
+        dates = {row[0] for row in cur.fetchall()}
+
+    if not dates:
+        return 0
+
+    today = date.today()
+    # If nothing logged today, start counting from yesterday
+    start = today if today in dates else today - timedelta(days=1)
+    if start not in dates:
+        return 0
+
+    streak = 0
+    current = start
+    while current in dates:
+        streak += 1
+        current -= timedelta(days=1)
+    return streak
+
+
+def get_week_summary(user_id: int) -> dict:
+    today = date.today()
+    week_ago = today - timedelta(days=6)
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                COALESCE(SUM(f.calories), 0),
+                COUNT(DISTINCT f.date),
+                COALESCE(SUM(a.cb), 0)
+            FROM (SELECT date, SUM(calories) as calories FROM food_logs
+                  WHERE user_id=%s AND date BETWEEN %s AND %s GROUP BY date) f
+            FULL OUTER JOIN
+                 (SELECT date, SUM(calories_burned) as cb FROM activity_logs
+                  WHERE user_id=%s AND date BETWEEN %s AND %s GROUP BY date) a
+            USING (date)
+        """, (user_id, week_ago, today, user_id, week_ago, today))
+        total_eaten, days_logged, total_burned = cur.fetchone()
+
+        cur.execute("""
+            SELECT weight, date FROM weight_logs
+            WHERE user_id=%s AND date BETWEEN %s AND %s
+            ORDER BY date
+        """, (user_id, week_ago, today))
+        weights = cur.fetchall()
+
+    avg_eaten = round(total_eaten / max(days_logged, 1))
+    weight_delta = None
+    if len(weights) >= 2:
+        weight_delta = round(weights[-1][0] - weights[0][0], 1)
+
+    return {
+        "total_eaten": total_eaten,
+        "total_burned": total_burned,
+        "avg_eaten": avg_eaten,
+        "days_logged": days_logged,
+        "weight_delta": weight_delta,
+    }
 
 
 # ── Undo ───────────────────────────────────────────────────────────────────

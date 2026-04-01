@@ -3,16 +3,19 @@ from datetime import date
 from contextlib import contextmanager
 import psycopg2
 import psycopg2.extras
+import psycopg2.pool
 from dotenv import load_dotenv
 
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+_pool = psycopg2.pool.ThreadedConnectionPool(1, 5, DATABASE_URL)
+
 
 @contextmanager
 def get_conn():
-    conn = psycopg2.connect(DATABASE_URL)
+    conn = _pool.getconn()
     conn.autocommit = False
     try:
         yield conn
@@ -21,7 +24,7 @@ def get_conn():
         conn.rollback()
         raise
     finally:
-        conn.close()
+        _pool.putconn(conn)
 
 
 def _fetchone(cursor):
